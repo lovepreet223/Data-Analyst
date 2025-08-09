@@ -8,12 +8,21 @@ import os
 import base64
 import mimetypes
 from typing import Dict, List, Tuple, Optional
-
 from openai import OpenAI
+from fastapi.middleware.cors import CORSMiddleware
+
 
 load_dotenv()
 
 app = FastAPI(title="Data Analyst Agent")
+# CORS: allow all origins (or restrict to known origins)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],          # replace with specific origins for security
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 API_KEY = os.getenv("OPENAI_API_KEY")
 DEFAULT_MODEL = "gpt-5-mini"
@@ -318,6 +327,10 @@ async def data_analyst_api(request: Request):
         parsed = {"response": answer}
 
     return JSONResponse(content=parsed)
+
+@app.get("/")
+async def root():
+    return {"status": "ok", "message": "Data Analyst Agent is running"}
 
 if __name__ == "__main__":
     import uvicorn

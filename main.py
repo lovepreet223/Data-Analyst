@@ -1,6 +1,4 @@
-import json
 from fastapi import FastAPI, UploadFile, Request, HTTPException
-from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
 from openai import RateLimitError
 import starlette.datastructures
@@ -10,6 +8,8 @@ import mimetypes
 from typing import Dict, List, Tuple, Optional
 from openai import OpenAI
 from fastapi.middleware.cors import CORSMiddleware
+import json
+from fastapi.responses import JSONResponse
 
 
 load_dotenv()
@@ -209,29 +209,6 @@ def ask_llm(model: str, question: str, extra_files: Optional[dict] = None) -> st
         input=input_content,
     )
 
-    """print("let me go...")
-    # Upload files and attach them
-    if extra_files:
-        for fname, fileinfo in extra_files.items():
-            file_bytes = base64.b64decode(fileinfo["content_base64"])
-            uploaded_file = client.files.create(
-                file=(fname, file_bytes, fileinfo["content_type"]),
-                purpose="assistants"
-            )
-            input_content[-1]["content"].append(
-                {"type": "input_file", "file_id": uploaded_file.id}
-            )
-
-    response = client.responses.create(
-        model=model,
-        tools=[
-            {"type": "web_search_preview"},
-            {"type": "code_interpreter", "container": {"type": "auto"}},
-        ],
-        tool_choice="auto",
-        input=input_content
-    )"""
-
     print(response)
     return parse_response(response)
 
@@ -257,6 +234,64 @@ def choose_questions_file(files: List[UploadFile]) -> Optional[UploadFile]:
 
 
     return txt_candidates[0] if txt_candidates else None
+
+
+def unwrap_json_payload(answer: str):
+    """
+    Unwraps nested JSON payloads.
+
+    - If `answer` is JSON, returns the parsed object.
+    - If it's a dict with a "response" field containing another JSON string,
+      parses that inner string.
+    - Falls back gracefully if parsing fails.
+    """
+    try:
+        parsed = json.loads(answer)
+
+        # Check for nested JSON in "response" key
+        if isinstance(parsed, dict) and isinstance(parsed.get("response"), str):
+            inner = parsed["response"].strip()
+
+            # Only try to parse if the string looks like JSON
+            if (inner.startswith("{") and inner.endswith("}")) or \
+               (inner.startswith("[") and inner.endswith("]")):
+                try:
+                    return json.loads(inner)
+                except json.JSONDecodeError:
+                    return parsed  # Keep original if inner isn't valid JSON
+
+        return parsed
+
+    except (json.JSONDecodeError, TypeError):
+        # If the top-level isn't valid JSON, return it wrapped in a dict
+        return {"response": answer}
+
+def strip_data_uri_prefix(s: str) -> str:
+    # Remove any standard data URI prefix if present
+    prefixes = (
+        "data:image/png;base64,",
+        "data:image/jpeg;base64,",
+        "data:image/jpg;base64,",
+        "data:image/gif;base64,",
+        "data:image/webp;base64,",
+        "data:application/octet-stream;base64,",
+        "data:application/pdf;base64,",
+    )
+    for p in prefixes:
+        if s.startswith(p):
+            return s[len(p):]
+    return s
+
+def strip_data_uris_in_obj(obj):
+    # Recursively traverse dicts/lists and strip known data URI prefixes from strings
+    if isinstance(obj, dict):
+        return {k: strip_data_uris_in_obj(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [strip_data_uris_in_obj(v) for v in obj]
+    if isinstance(obj, str):
+        return strip_data_uri_prefix(obj)
+    return obj
+
 
 @app.post("/api/")
 async def data_analyst_api(request: Request):
@@ -321,11 +356,8 @@ async def data_analyst_api(request: Request):
         print("❌ An unexpected error occurred:", e)
         answer = None
 
-    try:
-        parsed = json.loads(answer)
-    except (json.JSONDecodeError, TypeError):
-        parsed = {"response": answer}
-
+    parsed = unwrap_json_payload(answer)
+    parsed = strip_data_uris_in_obj(parsed)
     return JSONResponse(content=parsed)
 
 @app.get("/")
